@@ -6,15 +6,7 @@ jobs:
   p:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-java@v4
-        with: {distribution: temurin, java-version: 17}
       - run: |
-          B=https://repo1.maven.org/maven2/io/github/muntashirakon/libadb-android
-          curl -s $B/maven-metadata.xml
-          V=$(curl -s $B/maven-metadata.xml | grep -o '<release>[^<]*' | cut -d'>' -f2)
-          echo "VERSION=$V"
-          curl -s $B/$V/libadb-android-$V.pom
-          curl -sLO $B/$V/libadb-android-$V.aar
-          mkdir a && cd a && unzip -q ../libadb-android-$V.aar && ls -R | head -50
-          mkdir c && cd c && unzip -q ../classes.jar
-          for f in $(find . -name '*.class' | grep -v '\$' ); do javap -public "$f" 2>/dev/null; done
+          curl -s "https://search.maven.org/solrsearch/select?q=libadb&rows=20&wt=json" | python3 -c "import sys,json;[print('HIT',d['id'],d.get('latestVersion')) for d in json.load(sys.stdin)['response']['docs']]"
+          curl -s "https://search.maven.org/solrsearch/select?q=g:io.github.muntashirakon&rows=40&wt=json" | python3 -c "import sys,json;[print('HIT',d['id'],d.get('latestVersion')) for d in json.load(sys.stdin)['response']['docs']]"
+          curl -s https://repo1.maven.org/maven2/io/github/muntashirakon/ | grep -o 'href="[^"]*' | sed 's/^/DIR /'
