@@ -6,10 +6,14 @@ jobs:
   p:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 17}
       - run: |
           set +e
-          curl -s https://repo1.maven.org/maven2/io/github/muntashirakon/ | head -c 3000 | sed 's/^/R1 /'
-          curl -s "https://search.maven.org/solrsearch/select?q=libadb&rows=20&wt=json" | head -c 2000 | sed 's/^/S1 /'
-          curl -s https://jitpack.io/com/github/MuntashirAkon/libadb-android/maven-metadata.xml | head -c 1000 | sed 's/^/J1 /'
-          curl -s https://api.github.com/repos/MuntashirAkon/libadb-android/releases | grep -E '"tag_name"' | head | sed 's/^/G1 /'
-          curl -s https://raw.githubusercontent.com/MuntashirAkon/libadb-android/master/README.md | head -c 4000 | sed 's/^/RD /'
+          curl -s https://raw.githubusercontent.com/MuntashirAkon/libadb-android/master/README.md | tail -c +3900 | sed 's/^/RD /'
+          B=https://jitpack.io/com/github/MuntashirAkon/libadb-android/3.1.1
+          curl -s $B/libadb-android-3.1.1.pom | sed 's/^/PM /'
+          curl -sL -o l.aar $B/libadb-android-3.1.1.aar; ls -la l.aar
+          mkdir a && cd a && unzip -q ../l.aar && find . -type f | sed 's/^/FL /'
+          mkdir c && cd c && unzip -q ../classes.jar
+          for f in $(find . -name '*.class' | sort); do javap -public "$f" 2>/dev/null | sed 's/^/JP /'; done
