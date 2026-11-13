@@ -114,7 +114,11 @@ fun EventRow(event: UsageEvent) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (event.labels.isEmpty()) "Unknown app" else event.labels.joinToString(),
+                when {
+                    event.labels.isEmpty() -> "Unknown app"
+                    event.guessed -> "Likely " + event.labels.joinToString()
+                    else -> event.labels.joinToString()
+                },
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,

@@ -180,7 +180,7 @@ fun AppsScreen(say: (String) -> Unit) {
 
     fun toggle(entry: AppEntry, sensor: Sensor, granted: Boolean) {
         if (shell != Shell.Status.READY) {
-            say("Connect Shizuku on the Guard tab to block in one tap. Opening this app's settings instead.")
+            say("Connect the guard on the Guard tab to block in one tap. Opening this app's settings instead.")
             openAppSettings(context, entry.pkg)
             return
         }

@@ -6,6 +6,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
@@ -63,6 +66,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.miccamguard.Guard
 import app.miccamguard.MonitorService
+import app.miccamguard.PairingService
 import app.miccamguard.Prefs
 import app.miccamguard.R
 import app.miccamguard.Sensor
@@ -195,7 +199,7 @@ private fun SensorCard(
                     !active -> " "
                     apps.isNotEmpty() -> apps.joinToString()
                     shellReady -> "Finding the app…"
-                    else -> "Connect Shizuku to see which app"
+                    else -> "Connect the guard to see which app"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -206,36 +210,55 @@ private fun SensorCard(
     }
 }
 
-private fun openShizuku(context: Context): Boolean = try {
-    val intent = context.packageManager.getLaunchIntentForPackage(Shell.SHIZUKU_PACKAGE)
-    if (intent != null) {
-        context.startActivity(intent)
-        true
-    } else {
-        false
-    }
-} catch (_: Throwable) {
-    false
-}
-
-private fun installShizuku(context: Context) {
-    val id = Shell.SHIZUKU_PACKAGE
+/** Opens Developer options, scrolled to Wireless debugging where the phone supports it. */
+fun openWirelessDebugging(context: Context) {
+    val key = ":settings:fragment_args_key"
+    val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        .putExtra(key, "toggle_adb_wireless")
+        .putExtra(":settings:show_fragment_args", Bundle().apply { putString(key, "toggle_adb_wireless") })
     try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id")))
+        context.startActivity(intent)
     } catch (_: Throwable) {
         try {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id"))
-            )
+            context.startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (_: Throwable) {
         }
     }
 }
 
+private fun openUsageAccess(context: Context) {
+    try {
+        context.startActivity(
+            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:" + context.packageName))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: Throwable) {
+        try {
+            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Throwable) {
+        }
+    }
+}
+
+private fun developerOptionsOn(context: Context): Boolean = try {
+    Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+} catch (_: Throwable) {
+    false
+}
+
 @Composable
-private fun ShizukuCard(status: Shell.Status, onGuide: () -> Unit) {
+private fun ConnectCard(
+    status: Shell.Status,
+    pairing: PairingService.State,
+    onStartPairing: () -> Unit,
+    onGuide: () -> Unit,
+) {
     val context = LocalContext.current
     val ready = status == Shell.Status.READY
+    val waitingForCode = pairing == PairingService.State.SEARCHING ||
+        pairing == PairingService.State.FOUND || pairing == PairingService.State.FAILED ||
+        pairing == PairingService.State.PAIRING
     SectionCard {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -243,22 +266,24 @@ private fun ShizukuCard(status: Shell.Status, onGuide: () -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        when (status) {
-                            Shell.Status.READY -> "Shizuku connected"
-                            Shell.Status.NO_PERMISSION -> "Shizuku is running"
-                            Shell.Status.NOT_RUNNING -> "Shizuku is not started"
-                            Shell.Status.NOT_INSTALLED -> "Set up Shizuku (one time)"
+                        when {
+                            ready -> "Guard connected"
+                            status == Shell.Status.CONNECTING -> "Connecting…"
+                            waitingForCode -> "Waiting for the pairing code"
+                            status == Shell.Status.OFF -> "Wireless debugging is off"
+                            else -> "Connect the guard (one time)"
                         },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        when (status) {
-                            Shell.Status.READY -> "The guard can name the app using your mic or camera, and block it."
-                            Shell.Status.NO_PERMISSION -> "Allow Mic & Cam Guard to use it."
-                            Shell.Status.NOT_RUNNING -> "Open Shizuku and tap Start. Your blocks stay active meanwhile."
-                            Shell.Status.NOT_INSTALLED -> "Needed to name the app and block it in one tap."
+                        when {
+                            ready -> "The guard can name the app using your mic or camera, and block it."
+                            status == Shell.Status.CONNECTING -> "Looking for Wireless debugging on this phone."
+                            waitingForCode -> "In Wireless debugging, tap \"Pair device with pairing code\", then type the code into this app's notification."
+                            status == Shell.Status.OFF -> "Turn on Wireless debugging and the guard reconnects by itself. Apps you blocked stay blocked."
+                            else -> "Lets the guard name the app and block it in one tap. Uses Android's built-in Wireless debugging. No root, no other app."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -268,19 +293,19 @@ private fun ShizukuCard(status: Shell.Status, onGuide: () -> Unit) {
             if (!ready) {
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when (status) {
-                        Shell.Status.NO_PERMISSION ->
-                            Button(onClick = { Shell.requestPermission() }) { Text("Allow") }
-
-                        Shell.Status.NOT_RUNNING ->
-                            Button(onClick = { if (!openShizuku(context)) installShizuku(context) }) {
-                                Text("Open Shizuku")
-                            }
-
-                        else ->
-                            Button(onClick = { installShizuku(context) }) { Text("Install") }
+                    when {
+                        status == Shell.Status.CONNECTING -> Unit
+                        waitingForCode ->
+                            Button(onClick = { openWirelessDebugging(context) }) { Text("Open settings") }
+                        status == Shell.Status.OFF -> {
+                            Button(onClick = { openWirelessDebugging(context) }) { Text("Turn on") }
+                            OutlinedButton(onClick = { Shell.connectAsync() }) { Text("Retry") }
+                        }
+                        else -> {
+                            Button(onClick = onStartPairing) { Text("Start") }
+                            OutlinedButton(onClick = onGuide) { Text("How it works") }
+                        }
                     }
-                    OutlinedButton(onClick = onGuide) { Text("How to set up") }
                 }
             }
         }
@@ -292,19 +317,22 @@ private fun GuideDialog(onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = onClose,
         confirmButton = { TextButton(onClick = onClose) { Text("Got it") } },
-        title = { Text("Set up Shizuku") },
+        title = { Text("Connect the guard") },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                Text(
+                    "Android only lets an app see which app uses the mic, or block other apps, through its built-in Wireless debugging. This app connects to it directly. Nothing else to install, no root.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 val steps = listOf(
-                    "Install Shizuku from the Play Store.",
-                    "Open Settings > About device > Version and tap Build number 7 times. This unlocks Developer options.",
-                    "Connect to Wi-Fi. In Settings > System & updates > Developer options, turn on Wireless debugging.",
-                    "Open Shizuku and tap Pairing. Follow its notification: in Wireless debugging tap \"Pair device with pairing code\" and type the code into the notification.",
-                    "Back in Shizuku, tap Start.",
-                    "Come back here and tap Allow.",
+                    "Connect to Wi-Fi.",
+                    "Turn on Developer options: Settings > About device > Version, tap Build number 7 times.",
+                    "Tap Start in this app. It opens Developer options.",
+                    "Turn on Wireless debugging, open it and tap \"Pair device with pairing code\".",
+                    "Pull down the notification from Mic & Cam Guard, tap Enter code and type the 6 digits.",
                 )
                 steps.forEachIndexed { index, step ->
                     Row {
@@ -318,7 +346,7 @@ private fun GuideDialog(onClose: () -> Unit) {
                     }
                 }
                 Text(
-                    "After a phone restart, open Shizuku and tap Start again. Apps you blocked stay blocked even when Shizuku is stopped.",
+                    "You pair only once. After a restart or a Wi-Fi change Android turns Wireless debugging off. Turn it back on and the guard reconnects by itself. Apps you blocked stay blocked either way.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -326,7 +354,6 @@ private fun GuideDialog(onClose: () -> Unit) {
         },
     )
 }
-
 @Composable
 fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
     val context = LocalContext.current
@@ -341,6 +368,14 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
     val history by Guard.history.collectAsStateWithLifecycle()
     val shell by Shell.status.collectAsStateWithLifecycle()
     val shellReady = shell == Shell.Status.READY
+    val pairing by PairingService.state.collectAsStateWithLifecycle()
+    var usageAccess by remember { mutableStateOf(Guard.hasUsageAccess()) }
+    var devOptions by remember { mutableStateOf(developerOptionsOn(context)) }
+    LifecycleResumeEffect(Unit) {
+        usageAccess = Guard.hasUsageAccess()
+        devOptions = developerOptionsOn(context)
+        onPauseOrDispose { }
+    }
 
     var alerts by remember { mutableStateOf(Prefs.alerts(context)) }
     var showGuide by remember { mutableStateOf(false) }
@@ -360,6 +395,24 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
         } else {
             MonitorService.stop(context)
         }
+    }
+
+    fun startPairing() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            say("Allow notifications. The pairing code is typed into a notification.")
+            return
+        }
+        if (!devOptions) {
+            showGuide = true
+            say("First turn on Developer options: tap Build number 7 times in About device > Version.")
+            return
+        }
+        PairingService.start(context)
+        openWirelessDebugging(context)
     }
 
     fun setSensorOff(sensor: Sensor, off: Boolean) {
@@ -447,7 +500,12 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
             SensorCard(Sensor.CAMERA, monitoring, camActive, camApps, shellReady, Modifier.weight(1f))
         }
 
-        ShizukuCard(shell, onGuide = { showGuide = true })
+        ConnectCard(
+            status = shell,
+            pairing = pairing,
+            onStartPairing = { startPairing() },
+            onGuide = { showGuide = true },
+        )
 
         SectionLabel("Switch off for every app")
         SectionCard {
@@ -456,7 +514,7 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
                 tint = if (micOff) GuardColors.Danger else MaterialTheme.colorScheme.primary,
                 title = "Turn off microphone",
                 subtitle = if (shellReady) "No app can listen while this is on"
-                else "Needs Shizuku",
+                else "Connect the guard first",
                 checked = micOff,
                 enabled = shellReady,
                 onChange = { setSensorOff(Sensor.MIC, it) },
@@ -467,7 +525,7 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
                 tint = if (camOff) GuardColors.Danger else MaterialTheme.colorScheme.primary,
                 title = "Turn off camera",
                 subtitle = if (shellReady) "No app can use the camera while this is on"
-                else "Needs Shizuku",
+                else "Connect the guard first",
                 checked = camOff,
                 enabled = shellReady,
                 onChange = { setSensorOff(Sensor.CAMERA, it) },
@@ -488,6 +546,31 @@ fun HomeScreen(say: (String) -> Unit, onSeeHistory: () -> Unit) {
                     Prefs.setAlerts(context, it)
                 },
             )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBubble(R.drawable.ic_apps, if (usageAccess) GuardColors.Safe else MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Guess the app when unsure",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        if (usageAccess) "On. Shows the app that was on screen when the guard isn't connected"
+                        else "Give Usage access so it can name the likely app even without connecting",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { openUsageAccess(context) }) { Text(if (usageAccess) "Change" else "Allow") }
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(
                 Modifier

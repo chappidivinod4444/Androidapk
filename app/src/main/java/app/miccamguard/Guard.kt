@@ -65,6 +65,7 @@ object Guard {
                 labels = o.optJSONArray("labels").toStrings(),
                 start = o.getLong("start"),
                 end = if (o.has("end")) o.getLong("end") else null,
+                guessed = o.optBoolean("guess", false),
             )
         }
     } catch (_: Throwable) {
@@ -87,6 +88,7 @@ object Guard {
                     o.put("labels", JSONArray(e.labels))
                     o.put("start", e.start)
                     if (e.end != null) o.put("end", e.end)
+                    if (e.guessed) o.put("guess", true)
                     arr.put(o)
                 }
                 historyFile().writeText(arr.toString())
@@ -104,8 +106,8 @@ object Guard {
         id
     }
 
-    fun updateEvent(id: Long, packages: List<String>, labels: List<String>) =
-        mutate(id) { it.copy(packages = packages, labels = labels) }
+    fun updateEvent(id: Long, packages: List<String>, labels: List<String>, guessed: Boolean) =
+        mutate(id) { it.copy(packages = packages, labels = labels, guessed = guessed) }
 
     fun endEvent(id: Long) = mutate(id) { it.copy(end = System.currentTimeMillis()) }
 
@@ -156,7 +158,7 @@ object Guard {
 
     /**
      * Asks the system which app is using the sensor right now.
-     * Needs Shizuku. Returns package names, or an empty list when unknown.
+     * Needs the Wireless debugging connection. Returns package names, or an empty list when unknown.
      * Call from a background thread.
      */
     fun identify(sensor: Sensor): List<String> {
@@ -215,6 +217,12 @@ object Guard {
                     for (m in Regex("""Client package:\s*([A-Za-z0-9._]+)""").findAll(cam.out)) {
                         running.add(m.groupValues[1])
                     }
+                    // Short uses (like a face check) may be over already: take the newest
+                    // "CONNECT ... client for package X" line from the camera service log.
+                    if (running.isEmpty()) {
+                        Regex("""CONNECT device \S+ client for package ([A-Za-z0-9._]+)""")
+                            .find(cam.out)?.let { running.add(it.groupValues[1]) }
+                    }
                 }
             }
         }
@@ -225,6 +233,45 @@ object Guard {
 
         running.remove(app.packageName)
         return running.toList()
+    }
+
+    // ------------------------------------------------------------- best guess
+
+    fun hasUsageAccess(): Boolean = try {
+        val ops = app.getSystemService(android.app.AppOpsManager::class.java)
+        ops.unsafeCheckOpNoThrow(
+            android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            app.packageName,
+        ) == android.app.AppOpsManager.MODE_ALLOWED
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
+     * The app that was on screen a moment ago, from Usage access.
+     * Only a guess: a background app could be the real user.
+     */
+    fun foregroundApp(): String? {
+        if (!hasUsageAccess()) return null
+        return try {
+            val usm = app.getSystemService(android.app.usage.UsageStatsManager::class.java)
+            val now = System.currentTimeMillis()
+            val events = usm.queryEvents(now - 5 * 60_000L, now + 1000)
+            val e = android.app.usage.UsageEvents.Event()
+            var last: String? = null
+            while (events.hasNextEvent()) {
+                events.getNextEvent(e)
+                if (e.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED &&
+                    e.packageName != app.packageName
+                ) {
+                    last = e.packageName
+                }
+            }
+            last
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     // ------------------------------------------------------------------- apps
@@ -301,13 +348,13 @@ object Guard {
     private val safePackage = Regex("""^[A-Za-z0-9._]+$""")
 
     /**
-     * Blocks or allows one app's mic/camera permission through Shizuku.
+     * Blocks or allows one app's mic/camera permission through the Wireless debugging connection.
      * Returns null on success, or a message to show the user.
      * Call from a background thread.
      */
     fun setBlocked(pkg: String, sensor: Sensor, block: Boolean): String? {
         if (!safePackage.matches(pkg)) return "Unexpected app name"
-        if (Shell.status.value != Shell.Status.READY) return "Shizuku is not connected"
+        if (Shell.status.value != Shell.Status.READY) return "Connect the guard first (Guard tab)"
         val perm = sensor.permission
         val u = "--user $userId"
         val cmd = if (block) {
@@ -333,7 +380,7 @@ object Guard {
      * (the same switch as the Quick Settings tile). Call from a background thread.
      */
     fun setSensorOff(sensor: Sensor, off: Boolean): String? {
-        if (Shell.status.value != Shell.Status.READY) return "Shizuku is not connected"
+        if (Shell.status.value != Shell.Status.READY) return "Connect the guard first (Guard tab)"
         val verb = if (off) "enable" else "disable"
         val result = Shell.exec("cmd sensor_privacy $verb $userId ${sensor.privacyName}")
         if (!result.ok) return "Your phone didn't accept this switch."

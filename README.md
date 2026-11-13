@@ -18,12 +18,22 @@ Every push to `main` builds a new APK automatically (see the **Actions** tab).
 - **Apps list**: every app that can use the mic or camera, with one-tap block and allow.
 - **Switch off for every app**: the system-wide mic and camera switches.
 
-The app itself never asks for microphone or camera permission and has no internet permission.
+The app itself never asks for microphone or camera permission.
 
-## Shizuku
+## Connecting (one time, no root, no extra app)
 
 Android does not let a normal app see which app is using the mic, or change another app's permissions.
-[Shizuku](https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api) gives this app that ability without root.
-The Guard tab has a step-by-step setup guide.
+The only way without root is Android's built-in **Wireless debugging**, and this app connects to it directly
+(using [libadb-android](https://github.com/MuntashirAkon/libadb-android)). The Guard tab walks you through it:
 
-Without Shizuku the app still detects and logs every use, but shows "Unknown app" and opens the system settings page instead of blocking directly.
+1. Turn on Developer options (tap Build number 7 times).
+2. Tap **Start**, turn on Wireless debugging and tap "Pair device with pairing code".
+3. Type the 6-digit code into the app's notification.
+
+After a restart or Wi-Fi change, turn Wireless debugging on again and the app reconnects by itself.
+Blocks you made stay in place either way.
+
+Without connecting, the app still detects and logs every use. With **Usage access** allowed it also shows the
+app that was on screen at the time, marked "Likely".
+
+The app uses the internet permission only to reach the phone's own debugging service on 127.0.0.1.

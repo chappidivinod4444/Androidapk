@@ -42,6 +42,11 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        resources {
+            excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES")
+        }
+    }
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -62,6 +67,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
+    // Talks to the phone's own Wireless debugging service (no extra app, no root).
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 }

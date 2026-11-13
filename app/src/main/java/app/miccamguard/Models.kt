@@ -23,6 +23,8 @@ data class UsageEvent(
     val labels: List<String>,
     val start: Long,
     val end: Long?,
+    /** True when the app is a best guess (the app on screen), not confirmed by the system. */
+    val guessed: Boolean = false,
 )
 
 /** An installed app that has asked for mic and/or camera access. */
@@ -51,6 +53,9 @@ object Prefs {
 
     fun addTrusted(c: Context, pkg: String) =
         sp(c).edit().putStringSet("trusted", trusted(c) + pkg).apply()
+
+    fun paired(c: Context): Boolean = sp(c).getBoolean("paired", false)
+    fun setPaired(c: Context, v: Boolean) = sp(c).edit().putBoolean("paired", v).apply()
 
     fun sensorOff(c: Context, s: Sensor): Boolean = sp(c).getBoolean("off_" + s.name, false)
     fun setSensorOff(c: Context, s: Sensor, v: Boolean) =

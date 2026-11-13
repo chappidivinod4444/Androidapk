@@ -88,6 +88,14 @@ class MonitorService : Service() {
         }
     }
 
+    /** Quietly reconnects every 2 minutes if Wireless debugging was turned back on. */
+    private val reconnect: Runnable = object : Runnable {
+        override fun run() {
+            if (Shell.status.value != Shell.Status.READY) Shell.connectAsync()
+            handler.postDelayed(this, 120_000)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -115,6 +123,8 @@ class MonitorService : Service() {
         Guard.camApps.value = emptyList()
         Guard.monitoring.value = true
 
+        handler.postDelayed(reconnect, 30_000)
+
         audio.registerAudioRecordingCallback(recordingCallback, handler)
         cameras.registerAvailabilityCallback(cameraCallback, handler)
         registered = true
@@ -124,6 +134,7 @@ class MonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        handler.removeCallbacks(reconnect)
         if (registered) {
             try {
                 audio.unregisterAudioRecordingCallback(recordingCallback)
@@ -160,9 +171,12 @@ class MonitorService : Service() {
         refreshStatus()
     }
 
-    /** Works out which app it is (needs Shizuku), records it, and alerts the user. */
+    /** Works out which app it is (needs the connection, or Usage access for a guess), records it, and alerts the user. */
     private suspend fun resolve(sensor: Sensor, id: Long) {
         var pkgs: List<String> = emptyList()
+        if (Shell.status.value != Shell.Status.READY && Shell.paired()) {
+            withContext(Dispatchers.IO) { Shell.connectBlocking(4_000) }
+        }
         if (Shell.status.value == Shell.Status.READY) {
             for (attempt in 0 until 3) {
                 pkgs = withContext(Dispatchers.IO) { Guard.identify(sensor) }
@@ -170,16 +184,28 @@ class MonitorService : Service() {
                 delay(350)
             }
         }
+        var guessed = false
+        if (pkgs.isEmpty()) {
+            val onScreen = withContext(Dispatchers.IO) { Guard.foregroundApp() }
+            if (onScreen != null) {
+                pkgs = listOf(onScreen)
+                guessed = true
+            }
+        }
         val labels = pkgs.map { Guard.labelOf(it) }
-        Guard.updateEvent(id, pkgs, labels)
+        Guard.updateEvent(id, pkgs, labels, guessed)
         if (eventIds[sensor] == id) {
-            appsFlow(sensor).value = labels.ifEmpty { listOf("Unknown app") }
+            appsFlow(sensor).value = when {
+                labels.isEmpty() -> listOf("Unknown app")
+                guessed -> listOf("Likely " + labels.joinToString())
+                else -> labels
+            }
             refreshStatus()
         }
         if (!Prefs.alerts(this)) return
         val trusted = Prefs.trusted(this)
-        if (pkgs.isNotEmpty() && pkgs.all { it in trusted }) return
-        postAlert(sensor, pkgs, labels)
+        if (!guessed && pkgs.isNotEmpty() && pkgs.all { it in trusted }) return
+        postAlert(sensor, pkgs, labels, guessed)
     }
 
     // ---------------------------------------------------------- notifications
@@ -235,11 +261,14 @@ class MonitorService : Service() {
         }
     }
 
-    private fun postAlert(sensor: Sensor, pkgs: List<String>, labels: List<String>) {
+    private fun postAlert(sensor: Sensor, pkgs: List<String>, labels: List<String>, guessed: Boolean) {
         val nid = if (sensor == Sensor.MIC) NID_MIC else NID_CAM
         val what = sensor.label.lowercase()
-        val text = if (labels.isEmpty()) "An app started using your $what."
-        else "${labels.joinToString()} started using your $what."
+        val text = when {
+            labels.isEmpty() -> "An app started using your $what. Connect the guard to see which one."
+            guessed -> "An app started using your $what. On screen: ${labels.joinToString()} (likely, not confirmed)."
+            else -> "${labels.joinToString()} started using your $what."
+        }
 
         val builder = NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(if (sensor == Sensor.MIC) R.drawable.ic_mic else R.drawable.ic_camera)
@@ -251,7 +280,7 @@ class MonitorService : Service() {
             .setColor(0xFFFF6B6B.toInt())
             .setContentIntent(openAppIntent())
 
-        if (pkgs.size == 1) {
+        if (pkgs.size == 1 && !guessed) {
             val pkg = pkgs[0]
             val base = sensor.ordinal * 10
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -307,7 +336,7 @@ class ActionReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 Thread {
                     try {
-                        Shell.refresh()
+                        if (Shell.status.value != Shell.Status.READY) Shell.connectBlocking(5_000)
                         val error = Guard.setBlocked(pkg, sensor, block = true)
                         Guard.refreshApp(pkg)
                         nm.cancel(nid)
