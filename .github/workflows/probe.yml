@@ -7,6 +7,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -s "https://search.maven.org/solrsearch/select?q=libadb&rows=20&wt=json" | python3 -c "import sys,json;[print('HIT',d['id'],d.get('latestVersion')) for d in json.load(sys.stdin)['response']['docs']]"
-          curl -s "https://search.maven.org/solrsearch/select?q=g:io.github.muntashirakon&rows=40&wt=json" | python3 -c "import sys,json;[print('HIT',d['id'],d.get('latestVersion')) for d in json.load(sys.stdin)['response']['docs']]"
-          curl -s https://repo1.maven.org/maven2/io/github/muntashirakon/ | grep -o 'href="[^"]*' | sed 's/^/DIR /'
+          set +e
+          curl -s https://repo1.maven.org/maven2/io/github/muntashirakon/ | head -c 3000 | sed 's/^/R1 /'
+          curl -s "https://search.maven.org/solrsearch/select?q=libadb&rows=20&wt=json" | head -c 2000 | sed 's/^/S1 /'
+          curl -s https://jitpack.io/com/github/MuntashirAkon/libadb-android/maven-metadata.xml | head -c 1000 | sed 's/^/J1 /'
+          curl -s https://api.github.com/repos/MuntashirAkon/libadb-android/releases | grep -E '"tag_name"' | head | sed 's/^/G1 /'
+          curl -s https://raw.githubusercontent.com/MuntashirAkon/libadb-android/master/README.md | head -c 4000 | sed 's/^/RD /'
